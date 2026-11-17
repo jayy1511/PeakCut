@@ -92,7 +92,7 @@ def on_clip_ready(job, clip):
 
 def _caption(clip, creator):
     tags = " ".join("#" + h for h in clip.get("hashtags", []))
-    return "\n\n".join(x for x in (clip.get("description", ""), tags, creator.get("post_footer", "")) if x)
+    return "\n\n".join(x for x in (clip.get("description", ""), clip.get("music_credit", ""), tags, creator.get("post_footer", "")) if x)
 
 
 def _post(p):

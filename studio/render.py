@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 
 from . import config, roman
+from . import reactions
 from .media import NO_WINDOW, run
 
 W, H = config.OUT_W, config.OUT_H
@@ -254,12 +255,26 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
     # break the filter syntax).
     work = Path(tempfile.mkdtemp(prefix="pk"))
     try:
-        return _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass)
+        music = Path(__file__).parent / "music" / "sneaky-snitch.mp3"
+        use_music = clip.get("music") == "sneaky" and clip.get("category") in {"funny", "fail"} and music.is_file()
+        credit = ('Sneaky Snitch by Kevin MacLeod (incompetech.com). '
+                  'CC BY 4.0 https://creativecommons.org/licenses/by/4.0/ '
+                  'Music excerpt mixed with original audio.') if use_music else ""
+        if use_music:
+            shutil.copyfile(music, work / "music.mp3")
+            ass += (f"\nDialogue: 0,0:00:00.00,{_ts(min(5, end - start))},Cap,,0,0,0,,"
+                    r"{\an2\pos(540,1800)\fs22}Sneaky Snitch - Kevin MacLeod (incompetech.com)"
+                    r"\NCC BY 4.0 - creativecommons.org/licenses/by/4.0/ - mixed excerpt" + "\n")
+        cue = None if use_music else reactions.audio_filter(clip, words, start, end)
+        result = _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass, use_music, cue)
+        result["rendered_reaction"] = clip.get("reaction") if cue else None
+        result["music_credit"] = credit
+        return result
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
 
-def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layout, fg_h, ass: str) -> dict:
+def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layout, fg_h, ass: str, music=False, cue=None) -> dict:
     global _qsv_ok
     (work / f"{name}.ass").write_text(ass, encoding="utf-8")
     (work / "f").mkdir()
@@ -269,6 +284,19 @@ def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layo
     base = ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.2f}", "-t", f"{end - start:.2f}", "-i", str(src),
             "-filter_complex", fc, "-map", "[v]", "-map", "0:a:0", "-af", "loudnorm=I=-14:TP=-1.5:LRA=11",
             "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart", "-pix_fmt"]
+    if music:
+        duration = end - start
+        fc += (f";[1:a]atrim=duration={duration},asetpts=PTS-STARTPTS,volume=0.10,"
+               f"afade=t=in:d=0.5,afade=t=out:st={max(0, duration - 0.8)}:d=0.8[bed];"
+               "[0:a]asplit=2[voice][side];[bed][side]sidechaincompress=threshold=0.02:ratio=8:"
+               "attack=15:release=300[duck];[voice][duck]amix=inputs=2:duration=first:normalize=0,"
+               "loudnorm=I=-14:TP=-1.5:LRA=11[a]")
+        base = base[:base.index("-filter_complex")] + ["-stream_loop", "-1", "-i", "music.mp3",
+                "-filter_complex", fc, "-map", "[v]", "-map", "[a]", "-t", str(duration),
+                "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart", "-pix_fmt"]
+    if cue:
+        graph = fc + ";" + cue + ";[0:a][cue]amix=inputs=2:duration=first:normalize=0,loudnorm=I=-14:TP=-1.5:LRA=11[a]"
+        base = base[:base.index("-filter_complex")] + ["-filter_complex", graph, "-map", "[v]", "-map", "[a]"] + base[base.index("-c:a"):]
     encoders = []
     if _qsv_ok is not False:
         encoders.append(("qsv", ["nv12", "-c:v", "h264_qsv", "-global_quality", "23", "-preset", "fast"]))

@@ -141,7 +141,7 @@ def job_dir(jid) -> Path:
     return Path(_jobs[jid]["dir"])
 
 
-HIDDEN = ("dir", "user", "source_path", "recover")
+HIDDEN = ("dir", "user", "source_path", "recover", "candidates")
 
 
 def public(job) -> dict:
@@ -389,6 +389,7 @@ def render_one(job, clip, words):
         out = render.render_clip(src, d / "clips", clip["id"], local, near, job["width"], job["height"])
         clip.update(out, status="done", version=clip.get("version", 0) + 1, error=None)
         post = {k: clip[k] for k in ("title", "description", "hashtags", "hook", "start", "end", "score")}
+        post["music_credit"] = clip.get("music_credit", "")
         (d / "clips" / f"{clip['id']}.json").write_text(json.dumps(post, indent=1), encoding="utf-8")
         if clip["version"] == 1:
             clip.setdefault("made_at", time.time())
@@ -500,7 +501,7 @@ def _run_job(job):
     if resuming:   # after a restart: keep the transcript parts, clips and AI answers already made, and carry on
         _set(job, status="running", stage="Picking up where it stopped", error=None)
     else:
-        _set(job, status="running", stage="Getting the audio", progress=0.03, error=None, clips=[], ai={}, done_blocks=0)
+        _set(job, status="running", stage="Getting the audio", progress=0.03, error=None, clips=[], candidates=[], ai={}, done_blocks=0)
     if not transcribe.model_ready() and not transcribe.REMOTE:
         from . import fetch_model
         _set(job, stage="Getting the speech model (one time, about 480 MB)")
@@ -661,7 +662,7 @@ def _run_job(job):
             job["done_blocks"] = bi + 1
             save(job)
             continue
-        quota = max(1, math.ceil(left / (len(blocks) - bi)))
+        quota = min(left, max(2, math.ceil(left / len(blocks)) + 1))
         s0 = int((a - lo) / 16000)
         found, ai = brain.find_clips(bw, db[s0: s0 + int((b - a) / 16000) + 1], (b - a) / 16000, job["title"],
                                      job["uploader"], quota, int(o["min_len"]), int(o["max_len"]), notes.append)
@@ -670,13 +671,31 @@ def _run_job(job):
         if ai.get("note"):
             notes.append(ai["note"])
         for c in found:
-            c.update(id=f"clip{len(job['clips']) + 1:02d}", start=round(c["start"] + shift, 2),
+            c.update(start=round(c["start"] + shift, 2),
                      end=round(c["end"] + shift, 2), style=o["style"], layout=o["layout"], status="queued", version=0)
-            job["clips"].append(c)
-            futures.append((renders.submit(ctx.bind(make), c, list(words)), c))
+            job.setdefault("candidates", []).append(c)
         job["ai"] = {"model": model, "tokens": tokens, "note": "", "log": notes[-5:]}
         job["done_blocks"] = bi + 1       # a restart from here on carries on with the next part
         save(job)
+    candidates = sorted(job.pop("candidates", []), key=lambda clip: -clip["score"])
+    winners = []
+    for candidate in candidates:
+        if len(winners) + len(job["clips"]) >= int(o["max_clips"]):
+            break
+        prior = job["clips"] + winners
+        if brain._overlaps(candidate["start"], candidate["end"], prior):
+            continue
+        if candidate.get("category") != "other" and any(
+                candidate["title"] and candidate["title"].casefold() == other.get("title", "").casefold()
+                for other in prior):
+            continue
+        winners.append(candidate)
+    for candidate in sorted(winners, key=lambda clip: clip["start"]):
+        candidate["id"] = f"clip{len(job['clips']) + 1:02d}"
+        job["clips"].append(candidate)
+    save(job)
+    for candidate in winners:
+        futures.append((renders.submit(ctx.bind(make), candidate, words), candidate))
     if futures:
         _set(job, stage="Finishing the clips", progress=max(job["progress"], 0.92))
     _wait_for_clips(job, futures, began, renders._max_workers)

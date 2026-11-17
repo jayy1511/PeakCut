@@ -8,6 +8,7 @@ import time
 import numpy as np
 
 from . import ai, config, usage, roman
+from .reactions import TONES
 
 WINDOW_SEC, OVERLAP_SEC = 15 * 60, 60
 
@@ -26,6 +27,9 @@ SCHEMA = {
             "hashtags": {"type": "ARRAY", "items": {"type": "STRING"}},
             "highlight_words": {"type": "ARRAY", "items": {"type": "STRING"}},
             "reason": {"type": "STRING"},
+            "music": {"type": "STRING", "enum": ["none", "sneaky"]},
+            "reaction": {"type": "STRING", "enum": ["none", *TONES]},
+            "reaction_phrase": {"type": "STRING"},
         },
         "required": ["start", "end", "score", "hook", "title", "description", "hashtags", "reason"],
     },
@@ -56,6 +60,14 @@ Rules:
   complete sentence: never in the middle of a sentence or a thought. The clip must make sense on its own.
 - Do not pick intros, sponsor reads, "like and subscribe", or dead air.
 - Skip weak moments. Fewer strong clips beat many weak ones. Return [] if nothing is worth clipping.
+- Check that each excerpt has an understandable setup and a payoff. Reject moments that need missing context.
+- Choose the shortest complete version of each moment, keep the reaction, and avoid repeated versions of the same joke.
+- music: use "sneaky" only for playful mischief, awkward comedy, or a harmless prank. Otherwise use "none".
+- Usually leave reaction as "none". For a clear comic beat in funny, fail or clutch clips, choose one:
+  boom for a reveal, boing or spring for a rebound, falling_whistle or fail_horn for a flop,
+  question for confusion, glitch for an interruption, pop for a quick gag, sparkle or bell for a win.
+  Quote 2-8 exact consecutive spoken words ending at that beat in reaction_phrase.
+  Leave the source sound alone if its reaction carries the joke or the moment is serious.
 - score: 0-100, how likely a stranger keeps watching. Be honest; most clips are 50-80.
 - hook: at most 5 words, ALL CAPS, shown as big text on the video. Curiosity, but true to what happens.
 - title: at most 70 characters, for the post.
@@ -121,6 +133,9 @@ def _tidy(c, s, e):
         "hashtags": [t for t in tags if t][:8],
         "highlight_words": [roman.to_roman(_text(h, 30)) for h in words][:8],
         "reason": _text(c.get("reason"), 200),
+        "reaction": c.get("reaction") if isinstance(c.get("reaction"), str) and c["reaction"] in TONES and cat in {"funny", "fail", "clutch"} else "none",
+        "reaction_phrase": _text(c.get("reaction_phrase"), 120),
+        "music": "sneaky" if c.get("music") == "sneaky" and cat in {"funny", "fail"} else "none",
     }
 
 
@@ -222,8 +237,9 @@ def _snap(clip, lines, words, min_len, max_len, duration):
     e = min(e, s + max_len, duration)
     # a short breath after the last word, but never into the next sentence
     nxt = next((w["s"] for w in words if w["s"] > e - 0.01), None)
-    tail = 0.35 if nxt is None else min(0.35, max(0.08, nxt - e - 0.05))
-    return round(max(0.0, s - 0.15), 2), round(min(duration, e + tail), 2)
+    tail = 0.35 if nxt is None else min(0.35, max(0.0, nxt - e - 0.05))
+    start = max(0.0, s - 0.15)
+    return round(start, 2), round(min(duration, start + max_len, e + tail), 2)
 
 
 def fallback_by_loudness(db, words, n, max_len, duration):
