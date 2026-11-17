@@ -1,5 +1,16 @@
 # PeakCut
 
+This edition is maintained by [jayy1511](https://github.com/jayy1511). It builds on [the original PeakCut project](https://github.com/haziqahmedqasmi/PeakCut) and retains its MIT attribution.
+
+## Updates in this edition
+
+- Prerecorded jobs compare clip candidates across the full video before rendering, filtering overlapping moments and repeated titles.
+- The selection prompt favors self-contained setups and payoffs, and ending padding respects the requested duration limit.
+- Suitable comedy clips can use “Sneaky Snitch” with automatic attribution or one of ten locally synthesized reaction sounds. A reaction sound requires a unique match to the selected phrase and room before the clip ends.
+- Audio suggestions use the existing clip-selection request. FFmpeg mixes them locally.
+
+For a second Windows laptop, clone this repository and follow the quick start below. To bring over your settings, clips, Gemini key, and YouTube connection, stop PeakCut and transfer its data folder privately. Set `PEAKCUT_DATA` to the copied folder before launching. Keep runtime data and credentials out of Git. YouTube may require reconnecting if Google rejects the saved authorization.
+
 Turn long videos and live streams into captioned vertical clips, ready to post. Free and open source: run it on
 your own computer or server, with your own AI key.
 
